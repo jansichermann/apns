@@ -3,6 +3,7 @@ package apns
 import (
 	"crypto/tls"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type Client struct {
 type ClientConnection struct {
 	TlsConnection *tls.Conn
 	TcpConnection *net.Conn
+	Lock          *sync.Mutex
 }
 
 // Constructor. Use this if you want to set cert and key blocks manually.
@@ -77,6 +79,10 @@ func (this *Client) IsConnected() bool {
 
 func (this *Client) Close() error {
 	if this.Connection != nil {
+
+		this.Connection.Lock.Lock()
+		defer this.Connection.Lock.Unlock()
+
 		if this.Connection.TlsConnection != nil {
 			tcpConn := *this.Connection.TlsConnection
 			err := tcpConn.Close()
@@ -98,6 +104,10 @@ func (this *Client) Close() error {
 }
 
 func (this *Client) Connect() (err error) {
+
+	this.Connection.Lock.Lock()
+	defer this.Connection.Lock.Unlock()
+
 	var cert tls.Certificate
 
 	if len(this.CertificateBase64) == 0 && len(this.KeyBase64) == 0 {
@@ -148,6 +158,9 @@ func (this *Client) Connect() (err error) {
 // It's probably not a deal-breaker, but something to be aware of.
 
 func (this *Client) Write(resp *PushNotificationResponse, payload []byte) (err error) {
+	this.Connection.Lock.Lock()
+	defer this.Connection.Lock.Unlock()
+
 	_, err = this.Connection.TlsConnection.Write(payload)
 	if err != nil {
 		return err
