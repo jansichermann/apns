@@ -18,6 +18,12 @@ type Client struct {
 	CertificateBase64 string
 	KeyFile           string
 	KeyBase64         string
+	Connection        *ClientConnection
+}
+
+type ClientConnection struct {
+	TlsConnection *tls.Conn
+	TcpConnection *net.Conn
 }
 
 // Constructor. Use this if you want to set cert and key blocks manually.
@@ -51,6 +57,7 @@ func (this *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) 
 	}
 
 	err = this.ConnectAndWrite(resp, payload)
+
 	if err != nil {
 		resp.Success = false
 		resp.Error = err
@@ -63,15 +70,34 @@ func (this *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) 
 	return
 }
 
-// In lieu of a timeout (which would be available in Go 1.1)
-// we use a timeout channel pattern instead. We start two goroutines,
-// one of which just sleeps for TIMEOUT_SECONDS seconds, while the other
-// waits for a response from the Apple servers.
-//
-// Whichever channel puts data on first is the "winner". As such, it's
-// possible to get a false positive if Apple takes a long time to respond.
-// It's probably not a deal-breaker, but something to be aware of.
-func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []byte) (err error) {
+// this is naive
+func (this *Client) IsConnected() bool {
+	return this.Connection != nil && this.Connection.TcpConnection != nil && this.Connection.TlsConnection != nil
+}
+
+func (this *Client) Close() error {
+	if this.Connection != nil {
+		if this.Connection.TlsConnection != nil {
+			tcpConn := *this.Connection.TlsConnection
+			err := tcpConn.Close()
+			if err != nil {
+				return err
+			}
+		}
+
+		if this.Connection.TcpConnection != nil {
+			tcpConn := *this.Connection.TcpConnection
+			err := tcpConn.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (this *Client) Connect() (err error) {
 	var cert tls.Certificate
 
 	if len(this.CertificateBase64) == 0 && len(this.KeyBase64) == 0 {
@@ -90,20 +116,39 @@ func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []by
 		Certificates: []tls.Certificate{cert},
 	}
 
+	var clientConnection ClientConnection
+
 	conn, err := net.Dial("tcp", this.Gateway)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+
+	clientConnection.TcpConnection = &conn
 
 	tlsConn := tls.Client(conn, conf)
 	err = tlsConn.Handshake()
 	if err != nil {
 		return err
 	}
-	defer tlsConn.Close()
 
-	_, err = tlsConn.Write(payload)
+	clientConnection.TlsConnection = tlsConn
+
+	this.Connection = &clientConnection
+
+	return nil
+}
+
+// In lieu of a timeout (which would be available in Go 1.1)
+// we use a timeout channel pattern instead. We start two goroutines,
+// one of which just sleeps for TIMEOUT_SECONDS seconds, while the other
+// waits for a response from the Apple servers.
+//
+// Whichever channel puts data on first is the "winner". As such, it's
+// possible to get a false positive if Apple takes a long time to respond.
+// It's probably not a deal-breaker, but something to be aware of.
+
+func (this *Client) Write(resp *PushNotificationResponse, payload []byte) (err error) {
+	_, err = this.Connection.TlsConnection.Write(payload)
 	if err != nil {
 		return err
 	}
@@ -121,7 +166,7 @@ func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []by
 	responseChannel := make(chan []byte, 1)
 	go func() {
 		buffer := make([]byte, 6, 6)
-		conn.Read(buffer)
+		this.Connection.TlsConnection.Read(buffer)
 		responseChannel <- buffer
 	}()
 
@@ -143,4 +188,18 @@ func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []by
 	}
 
 	return nil
+}
+
+func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []byte) (err error) {
+	if !this.IsConnected() {
+		err = this.Connect()
+		if err != nil {
+			return err
+		}
+		defer this.Close()
+	}
+
+	err = this.Write(resp, payload)
+
+	return err
 }
