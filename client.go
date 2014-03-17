@@ -25,7 +25,7 @@ type Client struct {
 type ClientConnection struct {
 	TlsConnection *tls.Conn
 	TcpConnection *net.Conn
-	Lock          *sync.Mutex
+	Lock          sync.Mutex
 }
 
 // Constructor. Use this if you want to set cert and key blocks manually.
@@ -34,6 +34,8 @@ func BareClient(gateway, certificateBase64, keyBase64 string) (c *Client) {
 	c.Gateway = gateway
 	c.CertificateBase64 = certificateBase64
 	c.KeyBase64 = keyBase64
+	c.Connection = &ClientConnection{}
+
 	return
 }
 
@@ -43,6 +45,7 @@ func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
 	c.Gateway = gateway
 	c.CertificateFile = certificateFile
 	c.KeyFile = keyFile
+	c.Connection = &ClientConnection{}
 	return
 }
 
@@ -104,7 +107,6 @@ func (this *Client) Close() error {
 }
 
 func (this *Client) Connect() (err error) {
-
 	this.Connection.Lock.Lock()
 	defer this.Connection.Lock.Unlock()
 
@@ -126,14 +128,12 @@ func (this *Client) Connect() (err error) {
 		Certificates: []tls.Certificate{cert},
 	}
 
-	var clientConnection ClientConnection
-
 	conn, err := net.Dial("tcp", this.Gateway)
 	if err != nil {
 		return err
 	}
 
-	clientConnection.TcpConnection = &conn
+	this.Connection.TcpConnection = &conn
 
 	tlsConn := tls.Client(conn, conf)
 	err = tlsConn.Handshake()
@@ -141,9 +141,7 @@ func (this *Client) Connect() (err error) {
 		return err
 	}
 
-	clientConnection.TlsConnection = tlsConn
-
-	this.Connection = &clientConnection
+	this.Connection.TlsConnection = tlsConn
 
 	return nil
 }
