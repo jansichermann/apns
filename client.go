@@ -81,25 +81,22 @@ func (this *Client) IsConnected() bool {
 }
 
 func (this *Client) Close() error {
-	if this.Connection != nil {
+	this.Connection.Lock.Lock()
+	defer this.Connection.Lock.Unlock()
 
-		this.Connection.Lock.Lock()
-		defer this.Connection.Lock.Unlock()
-
-		if this.Connection.TlsConnection != nil {
-			tcpConn := *this.Connection.TlsConnection
-			err := tcpConn.Close()
-			if err != nil {
-				return err
-			}
+	if this.Connection.TlsConnection != nil {
+		tcpConn := *this.Connection.TlsConnection
+		err := tcpConn.Close()
+		if err != nil {
+			return err
 		}
+	}
 
-		if this.Connection.TcpConnection != nil {
-			tcpConn := *this.Connection.TcpConnection
-			err := tcpConn.Close()
-			if err != nil {
-				return err
-			}
+	if this.Connection.TcpConnection != nil {
+		tcpConn := *this.Connection.TcpConnection
+		err := tcpConn.Close()
+		if err != nil {
+			return err
 		}
 	}
 
