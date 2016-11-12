@@ -3,7 +3,6 @@ package apns
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/rand"
@@ -55,7 +54,7 @@ func NewAlertDictionary() *AlertDictionary {
 type PushNotification struct {
 	Identifier  int32
 	Expiry      uint32
-	DeviceToken string
+	DeviceToken []byte
 	payload     map[string]interface{}
 }
 
@@ -107,10 +106,6 @@ func (this *PushNotification) PayloadString() (string, error) {
 // Returns a byte array of the complete PushNotification struct. This array
 // is what should be transmitted to the APN Service.
 func (this *PushNotification) ToBytes() ([]byte, error) {
-	token, err := hex.DecodeString(this.DeviceToken)
-	if err != nil {
-		return nil, err
-	}
 	payload, err := this.PayloadJSON()
 	if err != nil {
 		return nil, err
@@ -123,8 +118,8 @@ func (this *PushNotification) ToBytes() ([]byte, error) {
 	binary.Write(buffer, binary.BigEndian, uint8(PUSH_COMMAND_VALUE))
 	binary.Write(buffer, binary.BigEndian, uint32(this.Identifier))
 	binary.Write(buffer, binary.BigEndian, uint32(this.Expiry))
-	binary.Write(buffer, binary.BigEndian, uint16(len(token)))
-	binary.Write(buffer, binary.BigEndian, token)
+	binary.Write(buffer, binary.BigEndian, uint16(len(this.DeviceToken)))
+	binary.Write(buffer, binary.BigEndian, this.DeviceToken)
 	binary.Write(buffer, binary.BigEndian, uint16(len(payload)))
 	binary.Write(buffer, binary.BigEndian, payload)
 	return buffer.Bytes(), nil

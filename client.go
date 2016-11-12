@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"net"
 	"sync"
-	"time"
 )
 
 // You'll need to provide your own CertificateFile
@@ -24,25 +23,12 @@ type Client struct {
 
 type ClientConnection struct {
 	TlsConnection *tls.Conn
-	TcpConnection *net.Conn
 	Lock          sync.Mutex
 }
 
-// Constructor. Use this if you want to set cert and key blocks manually.
-func BareClient(gateway, certificateBase64, keyBase64 string) (c *Client) {
-	c = new(Client)
-	c.Gateway = gateway
-	c.CertificateBase64 = certificateBase64
-	c.KeyBase64 = keyBase64
-	c.Connection = &ClientConnection{}
-
-	return
-}
-
 // Constructor. Use this if you want to load cert and key blocks from a file.
-func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
+func NewClient(certificateFile, keyFile string) (c *Client) {
 	c = new(Client)
-	c.Gateway = gateway
 	c.CertificateFile = certificateFile
 	c.KeyFile = keyFile
 	c.Connection = &ClientConnection{}
@@ -51,7 +37,7 @@ func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
 
 // Connects to the APN service and sends your push notification.
 // Remember that if the submission is successful, Apple won't reply.
-func (this *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) {
+func (this *Client) Send(conn net.Conn, pn *PushNotification) (resp *PushNotificationResponse) {
 	resp = new(PushNotificationResponse)
 
 	payload, err := pn.ToBytes()
@@ -61,7 +47,7 @@ func (this *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) 
 		return
 	}
 
-	err = this.ConnectAndWrite(resp, payload)
+	err = this.ConnectAndWrite(conn, resp, payload)
 
 	if err != nil {
 		resp.Success = false
@@ -73,11 +59,6 @@ func (this *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) 
 	resp.Error = nil
 
 	return
-}
-
-// this is naive
-func (this *Client) IsConnected() bool {
-	return this.Connection != nil && this.Connection.TcpConnection != nil && this.Connection.TlsConnection != nil
 }
 
 func (this *Client) Close() error {
@@ -92,18 +73,10 @@ func (this *Client) Close() error {
 		}
 	}
 
-	if this.Connection.TcpConnection != nil {
-		tcpConn := *this.Connection.TcpConnection
-		err := tcpConn.Close()
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
-func (this *Client) Connect() (err error) {
+func (this *Client) Connect(conn net.Conn) (err error) {
 	this.Connection.Lock.Lock()
 	defer this.Connection.Lock.Unlock()
 
@@ -122,15 +95,9 @@ func (this *Client) Connect() (err error) {
 	}
 
 	conf := &tls.Config{
-		Certificates: []tls.Certificate{cert},
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true,
 	}
-
-	conn, err := net.Dial("tcp", this.Gateway)
-	if err != nil {
-		return err
-	}
-
-	this.Connection.TcpConnection = &conn
 
 	tlsConn := tls.Client(conn, conf)
 	err = tlsConn.Handshake()
@@ -146,7 +113,7 @@ func (this *Client) Connect() (err error) {
 // In lieu of a timeout (which would be available in Go 1.1)
 // we use a timeout channel pattern instead. We start two goroutines,
 // one of which just sleeps for TIMEOUT_SECONDS seconds, while the other
-// waits for a response from the Apple servers.
+// waits for a response from the Apple ts.
 //
 // Whichever channel puts data on first is the "winner". As such, it's
 // possible to get a false positive if Apple takes a long time to respond.
@@ -161,51 +128,15 @@ func (this *Client) Write(resp *PushNotificationResponse, payload []byte) (err e
 		return err
 	}
 
-	// Create one channel that will serve to handle
-	// timeouts when the notification succeeds.
-	timeoutChannel := make(chan bool, 1)
-	go func() {
-		time.Sleep(time.Second * TIMEOUT_SECONDS)
-		timeoutChannel <- true
-	}()
-
-	// This channel will contain the binary response
-	// from Apple in the event of a failure.
-	responseChannel := make(chan []byte, 1)
-	go func() {
-		buffer := make([]byte, 6, 6)
-		this.Connection.TlsConnection.Read(buffer)
-		responseChannel <- buffer
-	}()
-
-	// First one back wins!
-	// The data structure for an APN response is as follows:
-	//
-	// command    -> 1 byte
-	// status     -> 1 byte
-	// identifier -> 4 bytes
-	//
-	// The first byte will always be set to 8.
-	resp = NewPushNotificationResponse()
-	select {
-	case r := <-responseChannel:
-		resp.Success = false
-		resp.AppleResponse = APPLE_PUSH_RESPONSES[r[1]]
-	case <-timeoutChannel:
-		resp.Success = true
-	}
-
 	return nil
 }
 
-func (this *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []byte) (err error) {
-	if !this.IsConnected() {
-		err = this.Connect()
-		if err != nil {
-			return err
-		}
-		defer this.Close()
+func (this *Client) ConnectAndWrite(conn net.Conn, resp *PushNotificationResponse, payload []byte) (err error) {
+	err = this.Connect(conn)
+	if err != nil {
+		return err
 	}
+	defer this.Close()
 
 	err = this.Write(resp, payload)
 
